@@ -21,6 +21,10 @@
  * @copyright  2007 Vasilis Daloukas
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
+
+use core_question\local\bank\question_bank_helper;
+use qbank_managecategories\question_categories;
+
 defined('MOODLE_INTERNAL') || die();
 
 // Define CONSTANTS.
@@ -1612,4 +1616,63 @@ function game_get_coursemodule_info($coursemodule) {
     }
 
     return $result;
+}
+
+/**
+ * Callback to return whether a set of questions is in use in a mod_game activity.
+ * It will check questionids directly referenced, all question categories and their
+ * subcategories (if in use), but not linked quiz modules as mod_quiz has a separate
+ * function for that.
+ * 
+ * @param array $questionids Array of questionids to check
+ * @return bool Whether any of the questionids is in use
+ */
+function game_questions_in_use($questionids) {
+    global $DB;
+
+    // We do not check the linked mod_quiz instances here, as mod_quiz has its own
+    // question_in_use function.
+
+    if (empty($questionids)) {
+        return false;
+    }
+ 
+    // First, see if we have any direct references to the questions.
+    
+    [$sql, $params] = $DB->get_in_or_equal($questionids, SQL_PARAMS_NAMED, 'q');
+    $count = $DB->get_field_sql("SELECT COUNT(id) FROM {game_queries} WHERE questionid $sql", $params);
+
+    if ($count[0] > 0) {
+        return true;
+    }
+
+    $count = $DB->get_field_sql("SELECT COUNT(id) FROM {game_repetitions} WHERE questionid $sql", $params);
+
+    if ($count[0] > 0) {
+        return true;
+    }
+
+    $questioncategories = $DB->get_records('game', null, '', 'questioncategoryid, subcategories');
+    $questioncategoryids = [];
+    foreach ($questioncategories as $questioncategory) {
+        if (!empty($questioncategory->subcategories)) {
+            $questioncategoryids += question_categorylist($questioncategory->questioncategoryid);
+        } else {
+            $questioncategoryids[] = $questioncategory->questioncategoryid;
+        }
+    }
+
+    $bookquizcategories = $DB->get_fieldset('game_bookquiz', 'questioncategoryid');
+    $questioncategoryids = array_merge($questioncategoryids, $bookquizcategories);
+
+    [$sql, $params] = $DB->get_in_or_equal($questioncategoryids, SQL_PARAMS_NAMED, 'q');
+
+    foreach ($questioncategoryids as $categoryid) {
+        $questionidsincategory = question_bank::get_finder()->get_questions_from_categories([$categoryid], null);
+        if (count(array_intersect($questionidsincategory, $questionids)) > 0) {
+            return true;
+        }
+    }
+
+    return false;
 }
